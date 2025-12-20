@@ -1,0 +1,76 @@
+version: "3.8"
+
+services:
+  # SearXNG - Self-hosted meta-search engine
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+      - SEARXNG_SECRET_KEY=your-secret-key-change-in-production
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis for SearXNG caching (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: searxng-redis
+    command: redis-server --save 30 1 --loglevel warning
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Research Team Application
+  research-team:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: research-team
+    depends_on:
+      searxng:
+        condition: service_healthy
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - SEARXNG_URL=http://searxng:8080
+      - MODEL_NAME=${MODEL_NAME:-gemini-2.5-flash}
+    stdin_open: true
+    tty: true
+    profiles:
+      - app
+
+volumes:
+  redis-data:
+
+networks:
+  default:
+    name: research-network

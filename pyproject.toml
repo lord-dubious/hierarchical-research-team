@@ -1,0 +1,75 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hierarchical-research-team"
+version = "1.0.0"
+description = "Multi-agent research team with LangGraph, self-hosted SearXNG search, and FlashRank reranking"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [
+    { name = "lord-dubious" }
+]
+keywords = [
+    "ai",
+    "langgraph",
+    "multi-agent",
+    "research",
+    "searxng",
+    "flashrank",
+    "gemini"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "langgraph>=0.2.0",
+    "langchain-google-genai>=2.0.0",
+    "langchain-core>=0.3.0",
+    "pydantic>=2.0.0",
+    "httpx>=0.27.0",
+    "python-dotenv>=1.0.0",
+    "rich>=13.0.0",
+    "typer>=0.12.0",
+    "flashrank>=0.2.0",
+    "arize-phoenix>=4.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-httpx>=0.30.0",
+    "ruff>=0.8.0",
+    "pre-commit>=4.0.0",
+]
+
+[project.scripts]
+research = "research_team.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/lord-dubious/hierarchical-research-team"
+Repository = "https://github.com/lord-dubious/hierarchical-research-team"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/research_team"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
