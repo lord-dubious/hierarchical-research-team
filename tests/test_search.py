@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 import httpx
+import pytest
 
 from research_team.models import SearchQuery, SearchResult
 from research_team.search import SearXNGClient, create_mock_results
@@ -62,6 +63,9 @@ class TestSearXNGClient:
             assert len(results) == 1
             assert results[0].title == "Test Result"
             assert results[0].url == "https://example.com"
+            assert results[0].provenance == "searxng"
+            assert results[0].degraded is False
+            assert results[0].metadata["service"] == "searxng"
 
     @pytest.mark.asyncio
     async def test_search_with_search_query_object(self):
@@ -110,10 +114,11 @@ class TestSearXNGClient:
             assert len(results) == 5
 
     @pytest.mark.asyncio
-    async def test_search_handles_http_error(self):
+    async def test_search_handles_http_error(self, caplog):
         """Test that search handles HTTP errors gracefully."""
         client = SearXNGClient()
 
+        caplog.set_level(logging.WARNING)
         with patch.object(client, "_get_client") as mock_get_client:
             mock_http_client = AsyncMock()
             mock_http_client.get.side_effect = httpx.HTTPError("Connection failed")
@@ -122,6 +127,10 @@ class TestSearXNGClient:
             results = await client.search("test")
 
             assert results == []
+            assert client.last_degraded is True
+            assert client.last_warning == "SearXNG search degraded; no live search results returned"
+            assert "Connection failed" in client.last_error
+            assert "SearXNG search failed" in caplog.text
 
     @pytest.mark.asyncio
     async def test_close_client(self):
@@ -165,7 +174,7 @@ class TestSearXNGClient:
 
         with patch("httpx.Client") as mock_client_class:
             mock_instance = MagicMock()
-            mock_instance.get.side_effect = Exception("Connection refused")
+            mock_instance.get.side_effect = httpx.HTTPError("Connection refused")
             mock_instance.__enter__ = MagicMock(return_value=mock_instance)
             mock_instance.__exit__ = MagicMock(return_value=False)
             mock_client_class.return_value = mock_instance
@@ -198,6 +207,10 @@ class TestCreateMockResults:
 
         assert len(results) == 5
         assert all(isinstance(r, SearchResult) for r in results)
+        assert all(r.provenance == "mock" for r in results)
+        assert all(r.degraded for r in results)
+        assert all(r.warning for r in results)
+        assert results[0].metadata["reason"] == "searxng_unavailable"
 
     def test_create_mock_results_custom_count(self):
         """Test creating mock results with custom count."""

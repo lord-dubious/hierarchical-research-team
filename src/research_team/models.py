@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
-from typing import Literal
+from enum import StrEnum
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 
-class AgentRole(str, Enum):
+class AgentRole(StrEnum):
     """Roles for agents in the research team."""
 
     SUPERVISOR = "supervisor"
@@ -26,6 +26,17 @@ class SearchResult(BaseModel):
     content: str = Field(default="", description="Snippet/description")
     engine: str = Field(default="", description="Search engine source")
     score: float = Field(default=0.0, description="Relevance score after reranking")
+    provenance: Literal["searxng", "mock", "flashrank", "fallback", "unknown"] = Field(
+        default="unknown", description="Where this result or score came from"
+    )
+    degraded: bool = Field(
+        default=False, description="Whether the result came from a degraded path"
+    )
+    warning: str | None = Field(default=None, description="Non-fatal warning for this result")
+    error: str | None = Field(default=None, description="Error context when result is degraded")
+    metadata: dict[str, Any] = Field(
+        default_factory=dict, description="Additional provenance and service metadata"
+    )
 
     model_config = {"extra": "ignore"}
 
@@ -50,6 +61,10 @@ class ResearchTask(BaseModel):
     status: Literal["pending", "in_progress", "completed", "failed"] = Field(default="pending")
     result: str | None = Field(default=None, description="Task result when completed")
     sources: list[SearchResult] = Field(default_factory=list, description="Sources used")
+    warnings: list[str] = Field(
+        default_factory=list, description="Warnings observed during task work"
+    )
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Task execution metadata")
     created_at: datetime = Field(default_factory=datetime.now)
 
 
@@ -69,6 +84,8 @@ class ResearchReport(BaseModel):
     summary: str = Field(description="Executive summary")
     sections: list[ReportSection] = Field(description="Report sections")
     sources: list[SearchResult] = Field(description="All sources used")
+    warnings: list[str] = Field(default_factory=list, description="Warnings from degraded services")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Report generation metadata")
     generated_at: datetime = Field(default_factory=datetime.now)
 
 
@@ -97,5 +114,6 @@ class TeamState(BaseModel):
     iteration: int = Field(default=0, description="Current iteration count")
     max_iterations: int = Field(default=10, description="Max iterations to prevent loops")
     error: str | None = Field(default=None, description="Error message if failed")
+    warnings: list[str] = Field(default_factory=list, description="Workflow warnings")
 
     model_config = {"arbitrary_types_allowed": True}
