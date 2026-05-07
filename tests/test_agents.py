@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from research_team.agents import ResearchTeam, SupervisorDecision, create_team
 from research_team.models import (
     AgentRole,
-    ReportSection,
     ResearchPlan,
     ResearchReport,
-    ResearchTask,
-    SearchResult,
     TeamState,
 )
 
@@ -157,20 +154,59 @@ class TestResearcherNode:
             team = ResearchTeam()
 
             # Mock search and rerank
-            with patch.object(team, "_execute_search", return_value=sample_search_results):
-                with patch(
-                    "research_team.agents.rerank_results", return_value=sample_search_results[:3]
-                ):
-                    state = TeamState(
-                        query="AI in healthcare",
-                        plan=sample_research_plan,
-                        findings=[],
-                    )
-                    result = team._researcher_node(state)
+            with (
+                patch.object(team, "_execute_search", return_value=sample_search_results),
+                patch(
+                    "research_team.agents.Reranker.rerank", return_value=sample_search_results[:3]
+                ),
+            ):
+                state = TeamState(
+                    query="AI in healthcare",
+                    plan=sample_research_plan,
+                    findings=[],
+                )
+                result = team._researcher_node(state)
 
-                    assert "findings" in result
-                    assert len(result["findings"]) == 1
-                    assert "tasks" in result
+                assert "findings" in result
+                assert len(result["findings"]) == 1
+                assert "tasks" in result
+
+    def test_execute_search_uses_marked_mock_results_when_searxng_unavailable(self, monkeypatch):
+        """Test unavailable SearXNG produces visibly degraded mock results."""
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+        with patch("research_team.agents.ChatGoogleGenerativeAI"):
+            team = ResearchTeam()
+
+            with patch.object(team.search_client, "is_available", return_value=False):
+                results = team._execute_search("What is AI?")
+
+        assert results
+        assert (
+            team.last_search_warning
+            == "SearXNG unavailable; using clearly marked mock search results"
+        )
+        assert all(result.provenance == "mock" for result in results)
+        assert all(result.degraded for result in results)
+
+    def test_synthesize_finding_labels_gemini_failure(self, monkeypatch, sample_search_results):
+        """Test Gemini synthesis failures are labeled as degraded output."""
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+        with patch("research_team.agents.ChatGoogleGenerativeAI") as mock_llm_class:
+            mock_llm = MagicMock()
+            mock_llm.invoke.side_effect = RuntimeError("quota exceeded")
+            mock_llm_class.return_value = mock_llm
+            team = ResearchTeam()
+
+            finding = team._synthesize_finding("What is AI?", sample_search_results)
+
+        assert finding.startswith("[DEGRADED:")
+        assert (
+            team.last_llm_warning
+            == "Gemini degraded; finding synthesized from search snippets only"
+        )
+        assert "quota exceeded" in team.last_llm_error
 
 
 class TestWriterNode:
@@ -211,6 +247,30 @@ class TestWriterNode:
 
             assert "report" in result
             assert isinstance(result["report"], ResearchReport)
+
+    def test_writer_report_labels_gemini_summary_failure(self, monkeypatch, sample_research_plan):
+        """Test report summary fallback records Gemini failure context."""
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+        with patch("research_team.agents.ChatGoogleGenerativeAI") as mock_llm_class:
+            mock_llm = MagicMock()
+            mock_llm.invoke.side_effect = RuntimeError("api unavailable")
+            mock_llm_class.return_value = mock_llm
+            team = ResearchTeam()
+
+            state = TeamState(
+                query="AI in healthcare",
+                plan=sample_research_plan,
+                findings=["Finding 1", "Finding 2", "Finding 3"],
+                warnings=["SearXNG unavailable"],
+            )
+            result = team._writer_node(state)
+
+        report = result["report"]
+        assert report.summary.startswith("[DEGRADED:")
+        assert "Gemini degraded" in report.warnings[-1]
+        assert report.metadata["degraded"] is True
+        assert report.metadata["llm_error"] == "api unavailable"
 
 
 class TestRouting:
@@ -277,11 +337,11 @@ class TestHelperMethods:
             mock_response = MagicMock()
             mock_response.content = """
             Objective: Understand AI
-            
+
             1. What is artificial intelligence?
             2. How does machine learning work?
             3. What are the applications of AI?
-            
+
             Methodology: Search, analyze, synthesize
             """
             mock_llm.invoke.return_value = mock_response

@@ -6,30 +6,32 @@ with a supervisor coordinating researcher and writer agents.
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
-from typing import Annotated, Literal
+from typing import Literal
 
 from dotenv import load_dotenv
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
-from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
 from research_team.models import (
     AgentRole,
+    ReportSection,
     ResearchPlan,
     ResearchReport,
     ResearchTask,
-    ReportSection,
     SearchResult,
     TeamState,
 )
-from research_team.reranker import rerank_results
+from research_team.reranker import Reranker
 from research_team.search import SearXNGClient, create_mock_results
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 class SupervisorDecision(BaseModel):
@@ -74,6 +76,12 @@ class ResearchTeam:
 
         # Initialize search client
         self.search_client = SearXNGClient(base_url=self.searxng_url)
+        self.last_search_warning: str | None = None
+        self.last_search_error: str | None = None
+        self.last_rerank_warning: str | None = None
+        self.last_rerank_error: str | None = None
+        self.last_llm_warning: str | None = None
+        self.last_llm_error: str | None = None
 
         # Build the graph
         self.graph = self._build_graph()
@@ -175,10 +183,23 @@ class ResearchTeam:
         search_results = self._execute_search(sub_question)
 
         # Rerank results
-        reranked = rerank_results(sub_question, search_results, top_k=5)
+        reranker = Reranker()
+        reranked = reranker.rerank(sub_question, search_results, top_k=5)
+        self.last_rerank_warning = reranker.last_warning
+        self.last_rerank_error = reranker.last_error
 
         # Synthesize finding from search results
         finding = self._synthesize_finding(sub_question, reranked)
+        warnings = [
+            warning
+            for warning in (
+                self.last_search_warning,
+                self.last_rerank_warning,
+                self.last_llm_warning,
+                *(source.warning for source in reranked if source.warning),
+            )
+            if warning
+        ]
 
         # Create task record
         task = ResearchTask(
@@ -188,12 +209,20 @@ class ResearchTeam:
             status="completed",
             result=finding,
             sources=reranked,
+            warnings=list(dict.fromkeys(warnings)),
+            metadata={
+                "search_error": self.last_search_error,
+                "rerank_error": self.last_rerank_error,
+                "llm_error": self.last_llm_error,
+                "degraded": any(source.degraded for source in reranked) or bool(warnings),
+            },
         )
 
         return {
             "search_results": state.search_results + reranked,
             "findings": state.findings + [finding],
             "tasks": state.tasks + [task],
+            "warnings": state.warnings + list(dict.fromkeys(warnings)),
             "current_agent": AgentRole.RESEARCHER,
         }
 
@@ -251,7 +280,7 @@ class ResearchTeam:
             ResearchPlan object.
         """
         system_prompt = """You are a research planning expert. Create a structured research plan.
-        
+
 Break down the query into 3-5 sub-questions that, when answered, will fully address the main query.
 Be specific and actionable."""
 
@@ -308,6 +337,9 @@ Respond with:
         Returns:
             List of search results.
         """
+        self.last_search_warning = None
+        self.last_search_error = None
+
         # Try SearXNG first
         if self.search_client.is_available():
             import asyncio
@@ -321,8 +353,15 @@ Respond with:
             results = loop.run_until_complete(self.search_client.search(query, num_results=10))
             if results:
                 return results
+            self.last_search_warning = self.search_client.last_warning
+            self.last_search_error = self.search_client.last_error
 
         # Fallback to mock results
+        if self.last_search_warning is None:
+            self.last_search_warning = (
+                "SearXNG unavailable; using clearly marked mock search results"
+            )
+        logger.warning(self.last_search_warning)
         return create_mock_results(query, num_results=10)
 
     def _synthesize_finding(self, question: str, results: list[SearchResult]) -> str:
@@ -352,9 +391,20 @@ Search Results:
 Provide a comprehensive answer that synthesizes information from multiple sources.
 Include specific facts and cite sources where appropriate."""
 
-        response = self.llm.invoke([HumanMessage(content=prompt)])
-
-        return response.content
+        try:
+            response = self.llm.invoke([HumanMessage(content=prompt)])
+            self.last_llm_warning = None
+            self.last_llm_error = None
+            return response.content
+        except Exception as exc:
+            self.last_llm_error = f"Gemini finding synthesis failed: {exc}"
+            self.last_llm_warning = "Gemini degraded; finding synthesized from search snippets only"
+            logger.warning(self.last_llm_error)
+            return (
+                f"[DEGRADED: {self.last_llm_warning}]\n"
+                f"Question: {question}\n\n"
+                f"Available search context:\n{context}"
+            )
 
     def _generate_report(self, state: TeamState) -> ResearchReport:
         """Generate the final research report.
@@ -365,11 +415,14 @@ Include specific facts and cite sources where appropriate."""
         Returns:
             ResearchReport object.
         """
+        if state.plan is None:
+            raise ValueError("Cannot generate report without a research plan")
+
         # Build sections from findings
         sections = []
         all_sources = []
 
-        for i, (question, finding) in enumerate(zip(state.plan.sub_questions, state.findings)):
+        for question, finding in zip(state.plan.sub_questions, state.findings, strict=False):
             # Get sources for this section
             section_sources = []
             for task in state.tasks:
@@ -392,13 +445,25 @@ Include specific facts and cite sources where appropriate."""
 Key findings:
 {chr(10).join(f"- {f[:200]}..." for f in state.findings)}"""
 
-        summary_response = self.llm.invoke([HumanMessage(content=summary_prompt)])
+        report_warnings = list(dict.fromkeys(state.warnings))
+        report_metadata: dict[str, object] = {"degraded": bool(report_warnings)}
+        try:
+            summary_response = self.llm.invoke([HumanMessage(content=summary_prompt)])
+            summary = summary_response.content
+        except Exception as exc:
+            warning = "Gemini degraded; executive summary assembled from findings only"
+            logger.warning("Gemini report summary failed: %s", exc)
+            report_warnings = list(dict.fromkeys([*report_warnings, warning]))
+            report_metadata.update({"degraded": True, "llm_error": str(exc)})
+            summary = f"[DEGRADED: {warning}]\n\n" + "\n\n".join(state.findings[:3])
 
         return ResearchReport(
             title=f"Research Report: {state.query}",
-            summary=summary_response.content,
+            summary=summary,
             sections=sections,
             sources=all_sources,
+            warnings=report_warnings,
+            metadata=report_metadata,
         )
 
     async def research(self, query: str) -> ResearchReport:
