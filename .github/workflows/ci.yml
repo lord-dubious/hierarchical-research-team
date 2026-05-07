@@ -32,6 +32,10 @@ jobs:
           ruff check src/ tests/
           ruff format --check src/ tests/
       
+      - name: Compile Python sources
+        run: |
+          python -m compileall -q src tests
+
       - name: Run tests
         env:
           GEMINI_API_KEY: test-api-key

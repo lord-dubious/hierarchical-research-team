@@ -1,6 +1,6 @@
 """CLI for Hierarchical Research Team.
 
-A Typer-based command-line interface for conducting AI-powered research.
+A Typer-based command-line interface for local research workflow demos.
 """
 
 from __future__ import annotations
@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -17,13 +17,13 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
-from research_team.agents import ResearchTeam, create_team
+from research_team.agents import create_team
 from research_team.models import ResearchReport
 from research_team.search import SearXNGClient
 
 app = typer.Typer(
     name="research",
-    help="AI-powered hierarchical research team using LangGraph and Gemini",
+    help="Local hierarchical research workflow using LangGraph, SearXNG, FlashRank, and Gemini",
     no_args_is_help=True,
 )
 console = Console()
@@ -48,33 +48,25 @@ def check_environment() -> bool:
 
 @app.command()
 def research(
-    query: str = typer.Argument(..., help="Research query or topic to investigate"),
-    output: Optional[Path] = typer.Option(
-        None,
-        "--output",
-        "-o",
-        help="Output file path for the report (markdown format)",
-    ),
-    model: str = typer.Option(
-        "gemini-2.5-flash",
-        "--model",
-        "-m",
-        help="Gemini model to use",
-    ),
-    searxng_url: str = typer.Option(
-        "http://localhost:8080",
-        "--searxng-url",
-        "-s",
-        help="SearXNG instance URL",
-    ),
-    verbose: bool = typer.Option(
-        False,
-        "--verbose",
-        "-v",
-        help="Enable verbose output",
-    ),
+    query: Annotated[str, typer.Argument(help="Research query or topic to investigate")],
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Output file path for the report (markdown format)"),
+    ] = None,
+    model: Annotated[
+        str,
+        typer.Option("--model", "-m", help="Gemini model to use"),
+    ] = "gemini-2.5-flash",
+    searxng_url: Annotated[
+        str,
+        typer.Option("--searxng-url", "-s", help="SearXNG instance URL"),
+    ] = "http://localhost:8080",
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-v", help="Enable verbose output"),
+    ] = False,
 ) -> None:
-    """Conduct AI-powered research on a topic.
+    """Run a local research workflow on a topic.
 
     This command uses a hierarchical team of AI agents to research the given query:
     - Supervisor: Plans and coordinates the research
@@ -99,7 +91,7 @@ def research(
     else:
         console.print(
             f"[yellow]Warning:[/yellow] SearXNG not available at {searxng_url}. "
-            "Using mock results for demonstration."
+            "Using degraded mock results; review source metadata before trusting output."
         )
 
     # Create the research team
@@ -117,7 +109,7 @@ def research(
             report = asyncio.run(team.research(query))
         except Exception as e:
             console.print(f"[red]Research failed:[/red] {e}")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
 
         progress.update(task, description="Research complete!")
 
@@ -165,12 +157,16 @@ def _display_report(report: ResearchReport) -> None:
         table.add_column("Title", style="cyan", no_wrap=False)
         table.add_column("URL", style="blue", no_wrap=False)
         table.add_column("Score", style="green", justify="right")
+        table.add_column("Provenance", style="magenta")
+        table.add_column("Degraded", style="yellow")
 
         for source in report.sources[:10]:
             table.add_row(
                 source.title[:50] + "..." if len(source.title) > 50 else source.title,
                 source.url[:60] + "..." if len(source.url) > 60 else source.url,
                 f"{source.score:.2f}",
+                source.provenance,
+                "yes" if source.degraded else "no",
             )
 
         console.print(table)
@@ -199,7 +195,11 @@ def _save_report(report: ResearchReport, path: Path) -> None:
 
     content += "## All Sources\n\n"
     for source in report.sources:
-        content += f"- [{source.title}]({source.url}) (Score: {source.score:.2f})\n"
+        degraded = ", degraded" if source.degraded else ""
+        content += (
+            f"- [{source.title}]({source.url}) "
+            f"(Score: {source.score:.2f}, provenance: {source.provenance}{degraded})\n"
+        )
 
     path.write_text(content)
 
@@ -265,7 +265,7 @@ def demo() -> None:
             report = asyncio.run(team.research(demo_query))
         except Exception as e:
             console.print(f"[red]Demo failed:[/red] {e}")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
 
         progress.update(task, description="Demo complete!")
 
