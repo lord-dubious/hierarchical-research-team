@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "hierarchical-research-team"
 version = "1.0.0"
-description = "Multi-agent research team with LangGraph, self-hosted SearXNG search, and FlashRank reranking"
+description = "Portfolio research workflow demo with explicit degraded metadata for SearXNG, FlashRank, and Gemini paths"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

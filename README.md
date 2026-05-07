@@ -1,14 +1,28 @@
 # Hierarchical Research Team
 
-A production-ready AI-powered research automation system using multi-agent orchestration. The system employs a hierarchical team of specialized agents that collaborate to conduct comprehensive research on any topic.
+A small portfolio project that experiments with LangGraph-based research workflows, SearXNG search, FlashRank reranking, and Gemini-generated summaries. It is useful for local demos and code review, but external service failures can degrade output quality and should be treated as visible warnings rather than successful research.
+
+## What Works Today
+
+- Creates a simple research plan, executes sub-question searches, reranks returned snippets, and assembles a markdown-style report.
+- Uses Pydantic models to carry source, warning, error, and degraded-path metadata through search results, tasks, and reports.
+- Provides a Typer CLI plus a Python API for local experiments.
+- Includes tests for model behavior, SearXNG error handling, FlashRank fallback paths, and agent workflow basics.
+
+## Current Limits
+
+- This is not a production research system and does not verify facts beyond the snippets returned by search providers.
+- Mock search results are used when SearXNG is unavailable, so reports can be illustrative rather than evidence-backed.
+- Gemini calls can fail because of missing credentials, network issues, quota limits, model changes, or API behavior.
+- The report writer uses simple prompting and does not guarantee complete citations, source quality, or benchmarked accuracy.
 
 ## Features
 
 - **Multi-Agent Architecture**: Supervisor, Researcher, and Writer agents with distinct roles
 - **Self-Hosted Search**: SearXNG integration for privacy-focused meta-search (no per-query costs)
 - **Smart Reranking**: FlashRank for CPU-efficient document relevance scoring
-- **Structured Output**: Generates well-organized research reports with citations
-- **Async Support**: Built with async/await for high performance
+- **Structured Output**: Generates report-shaped output with source metadata
+- **Async Support**: Uses async/await around the graph and search client
 - **Observable**: Phoenix tracing integration for monitoring agent behavior
 
 ## Architecture
@@ -62,6 +76,20 @@ pip install -e ".[dev]"
 cp .env.example .env
 # Edit .env and add your GEMINI_API_KEY
 ```
+
+## Dependency Behavior
+
+- **SearXNG**: Expected at `SEARXNG_URL`. If it is down or returns an HTTP error, the client records `last_error`, `last_warning`, and `last_degraded`; agent flows fall back to clearly marked mock results.
+- **FlashRank**: Imported lazily. If it is missing or reranking fails, results are scored with keyword-overlap fallback metadata and warnings.
+- **Gemini/API**: Requires `GEMINI_API_KEY`. Finding/report fallbacks include degraded labels and warning metadata when model calls fail inside the workflow.
+- **Phoenix tracing**: Listed as a dependency for observability experiments; it is not required to validate output quality.
+
+## Search/Reranking Boundaries
+
+- Search result `score` values are not comparable across live SearXNG, mock data, FlashRank, and fallback reranking paths.
+- Results with `degraded=True`, `provenance="mock"`, or `provenance="fallback"` should not be interpreted as high-confidence evidence.
+- Empty live search results can mean SearXNG returned no matches or that a service failure was recorded on the client state.
+- Reranking only reorders snippets already returned by search; it does not validate source accuracy or completeness.
 
 ### Start SearXNG (Optional but Recommended)
 
@@ -136,7 +164,7 @@ Options:
 
 ### SearXNG Client
 
-Self-hosted meta-search engine that aggregates results from multiple sources:
+Self-hosted meta-search client. Check result metadata and client state when results are empty:
 
 ```python
 from research_team import SearXNGClient
@@ -158,6 +186,8 @@ ranked = reranker.rerank("AI ethics", search_results, top_k=5)
 # Or use convenience function
 ranked = rerank_results("AI ethics", search_results, top_k=5)
 ```
+
+Fallback reranking sets `degraded=True`, `provenance="fallback"`, and warning metadata so downstream code can distinguish it from FlashRank scoring.
 
 ### Research Team
 
