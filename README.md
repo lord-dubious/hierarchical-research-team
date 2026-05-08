@@ -2,6 +2,11 @@
 
 A small portfolio project that experiments with LangGraph-based research workflows, SearXNG search, FlashRank reranking, and Gemini-generated summaries. It is useful for local demos and code review, but external service failures can degrade output quality and should be treated as visible warnings rather than successful research.
 
+## Portfolio Review
+
+- [Architecture](docs/ARCHITECTURE.md) - component boundaries, data flow, external dependencies, and degraded-mode behavior.
+- [Demo Guide](docs/DEMO.md) - safe local walkthrough commands and recruiter-facing talking points.
+
 ## What Works Today
 
 - Creates a simple research plan, executes sub-question searches, reranks returned snippets, and assembles a markdown-style report.
