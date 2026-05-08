@@ -96,6 +96,11 @@ class Reranker:
         ranker = self._get_ranker()
 
         if ranker == "fallback":
+            if not self.last_warning:
+                self.last_warning = (
+                    "FlashRank unavailable; using keyword-overlap fallback reranking"
+                )
+            self.last_degraded = True
             # Fallback: simple keyword matching score
             return self._fallback_rerank(query, results, top_k)
 

@@ -130,7 +130,9 @@ class TestReranker:
         reranker = Reranker()
 
         caplog.set_level(logging.WARNING)
-        with patch("builtins.__import__", side_effect=ImportError("missing flashrank")):
+        with patch(
+            "research_team.reranker.import_module", side_effect=ImportError("missing flashrank")
+        ):
             ranker = reranker._get_ranker()
 
         assert ranker == "fallback"
