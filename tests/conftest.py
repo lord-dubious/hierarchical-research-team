@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -156,7 +156,7 @@ def mock_gemini_response():
     """Create a mock Gemini API response."""
     mock_response = MagicMock()
     mock_response.content = """Here is a research plan:
-    
+
 1. What is artificial intelligence and how does it work?
 2. What are the main applications of AI in various industries?
 3. How is AI expected to evolve in the next decade?

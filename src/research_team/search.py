@@ -6,6 +6,7 @@ replacing expensive search APIs like Tavily or Serper.
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 
@@ -15,6 +16,8 @@ from dotenv import load_dotenv
 from research_team.models import SearchQuery, SearchResult
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 class SearXNGClient:
@@ -38,6 +41,9 @@ class SearXNGClient:
         self.base_url = base_url or os.getenv("SEARXNG_URL", "http://localhost:8080")
         self.timeout = timeout or int(os.getenv("SEARXNG_TIMEOUT", "10"))
         self._client: httpx.AsyncClient | None = None
+        self.last_error: str | None = None
+        self.last_warning: str | None = None
+        self.last_degraded: bool = False
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
@@ -76,6 +82,9 @@ class SearXNGClient:
             categories = categories or ["general"]
 
         client = await self._get_client()
+        self.last_error = None
+        self.last_warning = None
+        self.last_degraded = False
 
         params: dict[str, Any] = {
             "q": search_query,
@@ -97,14 +106,19 @@ class SearXNGClient:
                         content=item.get("content", ""),
                         engine=item.get("engine", ""),
                         score=0.0,  # Will be set by reranker
+                        provenance="searxng",
+                        metadata={"service": "searxng", "base_url": self.base_url},
                     )
                 )
 
             return results
 
         except httpx.HTTPError as e:
-            # Return empty results on error, log for debugging
-            print(f"SearXNG search error: {e}")
+            error = f"SearXNG search failed for query {search_query!r}: {e}"
+            self.last_error = error
+            self.last_warning = "SearXNG search degraded; no live search results returned"
+            self.last_degraded = True
+            logger.warning(error)
             return []
 
     async def search_sync(
@@ -126,13 +140,15 @@ class SearXNGClient:
             with httpx.Client(timeout=5) as client:
                 response = client.get(f"{self.base_url}/healthz")
                 return response.status_code == 200
-        except Exception:
+        except httpx.HTTPError as exc:
+            logger.debug("SearXNG health endpoint failed: %s", exc)
             # Try the main page as fallback
             try:
                 with httpx.Client(timeout=5) as client:
                     response = client.get(self.base_url)
                     return response.status_code == 200
-            except Exception:
+            except httpx.HTTPError as fallback_exc:
+                logger.debug("SearXNG main page availability check failed: %s", fallback_exc)
                 return False
 
 
@@ -153,6 +169,10 @@ def create_mock_results(query: str, num_results: int = 5) -> list[SearchResult]:
             content=f"A comprehensive overview of {query} and its applications...",
             engine="wikipedia",
             score=0.95,
+            provenance="mock",
+            degraded=True,
+            warning="Mock search result used because live SearXNG results were unavailable",
+            metadata={"service": "mock_search", "reason": "searxng_unavailable"},
         ),
         SearchResult(
             title=f"{query}: A Complete Guide",
@@ -160,6 +180,10 @@ def create_mock_results(query: str, num_results: int = 5) -> list[SearchResult]:
             content=f"This guide covers everything you need to know about {query}...",
             engine="google",
             score=0.88,
+            provenance="mock",
+            degraded=True,
+            warning="Mock search result used because live SearXNG results were unavailable",
+            metadata={"service": "mock_search", "reason": "searxng_unavailable"},
         ),
         SearchResult(
             title=f"Latest Research on {query}",
@@ -167,6 +191,10 @@ def create_mock_results(query: str, num_results: int = 5) -> list[SearchResult]:
             content=f"Recent academic papers and research findings on {query}...",
             engine="arxiv",
             score=0.82,
+            provenance="mock",
+            degraded=True,
+            warning="Mock search result used because live SearXNG results were unavailable",
+            metadata={"service": "mock_search", "reason": "searxng_unavailable"},
         ),
         SearchResult(
             title=f"{query} Best Practices",
@@ -174,6 +202,10 @@ def create_mock_results(query: str, num_results: int = 5) -> list[SearchResult]:
             content=f"Expert opinions and best practices for implementing {query}...",
             engine="bing",
             score=0.75,
+            provenance="mock",
+            degraded=True,
+            warning="Mock search result used because live SearXNG results were unavailable",
+            metadata={"service": "mock_search", "reason": "searxng_unavailable"},
         ),
         SearchResult(
             title=f"GitHub - {query} Examples",
@@ -181,6 +213,10 @@ def create_mock_results(query: str, num_results: int = 5) -> list[SearchResult]:
             content=f"Open source projects and examples related to {query}...",
             engine="github",
             score=0.70,
+            provenance="mock",
+            degraded=True,
+            warning="Mock search result used because live SearXNG results were unavailable",
+            metadata={"service": "mock_search", "reason": "searxng_unavailable"},
         ),
     ]
 

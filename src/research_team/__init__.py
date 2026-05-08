@@ -1,10 +1,13 @@
-"""Hierarchical Research Team - Multi-agent research with LangGraph.
+"""Hierarchical Research Team - local multi-agent research experiment.
 
-A production-ready research automation system using:
+A portfolio project using:
 - LangGraph for multi-agent orchestration
-- SearXNG for self-hosted meta-search
-- FlashRank for CPU-based document reranking
-- Gemini for AI reasoning
+- SearXNG for self-hosted meta-search when available
+- FlashRank for CPU-based document reranking when available
+- Gemini for model-generated summaries
+
+External search, reranking, and model failures are surfaced through degraded
+metadata on results, tasks, reports, or client state fields.
 """
 
 from research_team.agents import ResearchTeam, create_team

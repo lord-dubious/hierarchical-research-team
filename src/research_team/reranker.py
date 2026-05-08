@@ -6,7 +6,21 @@ filtering top results to save context tokens when sending to the LLM.
 
 from __future__ import annotations
 
+import logging
+from importlib import import_module
+from typing import Any, Literal, Protocol
+
 from research_team.models import SearchResult
+
+logger = logging.getLogger(__name__)
+
+
+class _RankerProtocol(Protocol):
+    """Minimal FlashRank interface used by this wrapper."""
+
+    def rerank(self, request: Any) -> list[dict[str, Any]]:
+        """Rerank passages for a FlashRank request."""
+        ...
 
 
 class Reranker:
@@ -25,18 +39,35 @@ class Reranker:
                 - ms-marco-TinyBERT-L-2-v2 (fastest, smaller)
         """
         self.model_name = model_name
-        self._ranker = None
+        self._ranker: _RankerProtocol | Literal["fallback"] | None = None
+        self.last_error: str | None = None
+        self.last_warning: str | None = None
+        self.last_degraded: bool = False
 
-    def _get_ranker(self):
+    def _get_ranker(self) -> _RankerProtocol | Literal["fallback"]:
         """Lazy load the FlashRank model."""
         if self._ranker is None:
             try:
-                from flashrank import Ranker
-
-                self._ranker = Ranker(model_name=self.model_name)
+                flashrank = import_module("flashrank")
+                ranker_cls: Any = flashrank.Ranker
+                self._ranker = ranker_cls(model_name=self.model_name)
             except ImportError:
-                print("FlashRank not installed, using fallback scoring")
+                self.last_error = "FlashRank is not installed"
+                self.last_warning = (
+                    "FlashRank unavailable; using keyword-overlap fallback reranking"
+                )
+                self.last_degraded = True
+                logger.warning(self.last_warning)
                 self._ranker = "fallback"
+            except Exception as exc:
+                self.last_error = f"FlashRank initialization failed: {exc}"
+                self.last_warning = (
+                    "FlashRank initialization degraded; using keyword-overlap fallback reranking"
+                )
+                self.last_degraded = True
+                logger.warning(self.last_error)
+                self._ranker = "fallback"
+        assert self._ranker is not None
         return self._ranker
 
     def rerank(
@@ -58,14 +89,24 @@ class Reranker:
         if not results:
             return []
 
+        self.last_error = None
+        self.last_warning = None
+        self.last_degraded = False
+
         ranker = self._get_ranker()
 
         if ranker == "fallback":
+            if not self.last_warning:
+                self.last_warning = (
+                    "FlashRank unavailable; using keyword-overlap fallback reranking"
+                )
+            self.last_degraded = True
             # Fallback: simple keyword matching score
             return self._fallback_rerank(query, results, top_k)
 
         try:
-            from flashrank import RerankRequest
+            flashrank = import_module("flashrank")
+            rerank_request_cls: Any = flashrank.RerankRequest
 
             # Prepare passages for FlashRank
             passages = []
@@ -79,7 +120,7 @@ class Reranker:
                 )
 
             # Create rerank request
-            rerank_request = RerankRequest(query=query, passages=passages)
+            rerank_request = rerank_request_cls(query=query, passages=passages)
 
             # Execute reranking
             reranked = ranker.rerank(rerank_request)
@@ -90,19 +131,28 @@ class Reranker:
                 idx = item["id"]
                 original = results[idx]
                 reranked_results.append(
-                    SearchResult(
-                        title=original.title,
-                        url=original.url,
-                        content=original.content,
-                        engine=original.engine,
-                        score=item["score"],
+                    original.model_copy(
+                        update={
+                            "score": item["score"],
+                            "provenance": "flashrank",
+                            "metadata": {
+                                **original.metadata,
+                                "reranker": "flashrank",
+                                "reranker_model": self.model_name,
+                            },
+                        }
                     )
                 )
 
             return reranked_results
 
         except Exception as e:
-            print(f"FlashRank reranking failed: {e}, using fallback")
+            self.last_error = f"FlashRank reranking failed: {e}"
+            self.last_warning = (
+                "FlashRank reranking degraded; using keyword-overlap fallback reranking"
+            )
+            self.last_degraded = True
+            logger.warning(self.last_error)
             return self._fallback_rerank(query, results, top_k)
 
     def _fallback_rerank(
@@ -110,6 +160,7 @@ class Reranker:
         query: str,
         results: list[SearchResult],
         top_k: int,
+        reason: str | None = None,
     ) -> list[SearchResult]:
         """Fallback reranking using simple keyword matching.
 
@@ -132,13 +183,22 @@ class Reranker:
             overlap = len(query_terms & text_terms)
             score = overlap / max(len(query_terms), 1)
 
+            warning = reason or self.last_warning or "Keyword-overlap fallback reranking used"
             scored_results.append(
-                SearchResult(
-                    title=result.title,
-                    url=result.url,
-                    content=result.content,
-                    engine=result.engine,
-                    score=score,
+                result.model_copy(
+                    update={
+                        "score": score,
+                        "provenance": "fallback",
+                        "degraded": True,
+                        "warning": warning,
+                        "error": self.last_error or result.error,
+                        "metadata": {
+                            **result.metadata,
+                            "reranker": "keyword_overlap_fallback",
+                            "reranker_model": self.model_name,
+                            "reranker_degraded": True,
+                        },
+                    }
                 )
             )
 

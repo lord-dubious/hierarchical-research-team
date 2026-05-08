@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime
 
-import pytest
-
 from research_team.models import (
     AgentRole,
     ReportSection,
@@ -35,6 +33,28 @@ class TestSearchResult:
         assert result.content == "Test content"
         assert result.engine == "google"
         assert result.score == 0.85
+        assert result.provenance == "unknown"
+        assert result.degraded is False
+        assert result.warning is None
+        assert result.error is None
+        assert result.metadata == {}
+
+    def test_search_result_degraded_metadata(self):
+        """Test degraded search metadata is preserved."""
+        result = SearchResult(
+            title="Mock Title",
+            url="https://example.com/mock",
+            provenance="mock",
+            degraded=True,
+            warning="SearXNG unavailable",
+            error="Connection failed",
+            metadata={"service": "mock_search"},
+        )
+        assert result.provenance == "mock"
+        assert result.degraded is True
+        assert result.warning == "SearXNG unavailable"
+        assert result.error == "Connection failed"
+        assert result.metadata["service"] == "mock_search"
 
     def test_search_result_defaults(self):
         """Test default values for search result."""
@@ -107,6 +127,8 @@ class TestResearchTask:
         assert task.query == "What is AI?"
         assert task.assigned_to == AgentRole.RESEARCHER
         assert task.status == "pending"
+        assert task.warnings == []
+        assert task.metadata == {}
 
     def test_research_task_with_result(self):
         """Test research task with result."""
@@ -119,6 +141,18 @@ class TestResearchTask:
         )
         assert task.status == "completed"
         assert task.result == "AI is artificial intelligence..."
+
+    def test_research_task_warning_metadata(self):
+        """Test task warning and degraded metadata."""
+        task = ResearchTask(
+            task_id="task-001",
+            query="What is AI?",
+            assigned_to=AgentRole.RESEARCHER,
+            warnings=["SearXNG unavailable"],
+            metadata={"degraded": True},
+        )
+        assert task.warnings == ["SearXNG unavailable"]
+        assert task.metadata["degraded"] is True
 
     def test_research_task_with_sources(self, sample_search_results):
         """Test research task with sources."""
@@ -191,7 +225,22 @@ class TestResearchReport:
         assert report.summary == "This is a summary"
         assert len(report.sections) == 2
         assert len(report.sources) == 2
+        assert report.warnings == []
+        assert report.metadata == {}
         assert isinstance(report.generated_at, datetime)
+
+    def test_research_report_warning_metadata(self):
+        """Test report warning and degraded metadata."""
+        report = ResearchReport(
+            title="Report",
+            summary="Summary",
+            sections=[],
+            sources=[],
+            warnings=["Gemini degraded"],
+            metadata={"degraded": True, "llm_error": "quota"},
+        )
+        assert report.warnings == ["Gemini degraded"]
+        assert report.metadata["degraded"] is True
 
     def test_research_report_with_timestamp(self):
         """Test research report with specific timestamp."""
@@ -222,6 +271,7 @@ class TestTeamState:
         assert state.iteration == 0
         assert state.max_iterations == 10
         assert state.error is None
+        assert state.warnings == []
 
     def test_team_state_with_plan(self, sample_research_plan):
         """Test team state with plan."""

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from research_team.models import SearchResult
 from research_team.reranker import Reranker, rerank_results
@@ -40,6 +39,10 @@ class TestReranker:
 
         assert len(results) == 3
         assert all(isinstance(r, SearchResult) for r in results)
+        assert all(r.provenance == "fallback" for r in results)
+        assert all(r.degraded for r in results)
+        assert all(r.warning for r in results)
+        assert all(r.metadata["reranker"] == "keyword_overlap_fallback" for r in results)
         # Results should be sorted by score descending
         assert results[0].score >= results[1].score >= results[2].score
 
@@ -83,6 +86,9 @@ class TestReranker:
             results = reranker.rerank("AI", sample_search_results, top_k=3)
 
             assert len(results) == 3
+            assert reranker.last_degraded is True
+            assert reranker.last_warning is not None
+            assert all(result.provenance == "fallback" for result in results)
 
     def test_rerank_with_flashrank_fallback_on_exception(self, sample_search_results):
         """Test that reranker falls back on FlashRank errors."""
@@ -118,6 +124,36 @@ class TestReranker:
         # Should now be set to something (either Ranker instance or "fallback")
         assert reranker._ranker is not None
         assert ranker == reranker._ranker
+
+    def test_lazy_loading_logs_flashrank_import_fallback(self, caplog):
+        """Test missing FlashRank logs and records fallback state."""
+        reranker = Reranker()
+
+        caplog.set_level(logging.WARNING)
+        with patch(
+            "research_team.reranker.import_module", side_effect=ImportError("missing flashrank")
+        ):
+            ranker = reranker._get_ranker()
+
+        assert ranker == "fallback"
+        assert reranker.last_degraded is True
+        assert reranker.last_error == "FlashRank is not installed"
+        assert "FlashRank unavailable" in caplog.text
+
+    def test_lazy_loading_records_flashrank_initialization_failure(self, caplog):
+        """Test FlashRank construction failure records degraded state."""
+        reranker = Reranker()
+        fake_flashrank = MagicMock()
+        fake_flashrank.Ranker.side_effect = RuntimeError("model unavailable")
+
+        caplog.set_level(logging.WARNING)
+        with patch("research_team.reranker.import_module", return_value=fake_flashrank):
+            ranker = reranker._get_ranker()
+
+        assert ranker == "fallback"
+        assert reranker.last_degraded is True
+        assert "model unavailable" in reranker.last_error
+        assert "FlashRank initialization failed" in caplog.text
 
     def test_fallback_rerank_handles_empty_query(self, sample_search_results):
         """Test fallback with empty query."""
