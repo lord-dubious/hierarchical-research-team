@@ -14,12 +14,48 @@ This document is written for reviewers who want to understand how the project is
 6. Writer/report output
 
 ```mermaid
-flowchart LR
-    A1[Research question] --> A2[Planner]
-    A2[Planner] --> A3[SearXNG search or mock results]
-    A3[SearXNG search or mock results] --> A4[FlashRank reranking or fallback scoring]
-    A4[FlashRank reranking or fallback scoring] --> A5[Researcher agents]
-    A5[Researcher agents] --> A6[Writer/report output]
+flowchart TB
+    classDef input fill:#ecfeff,stroke:#0891b2,stroke-width:2px,color:#164e63
+    classDef core fill:#eef2ff,stroke:#4f46e5,stroke-width:2px,color:#312e81
+    classDef external fill:#fff7ed,stroke:#ea580c,stroke-width:2px,color:#7c2d12
+    classDef metadata fill:#f0fdf4,stroke:#16a34a,stroke-width:2px,color:#14532d
+    classDef review fill:#fef2f2,stroke:#dc2626,stroke-width:2px,color:#7f1d1d
+
+    Question[/Research question/]:::input
+    Reader[/Human source review/]:::review
+
+    subgraph Workflow["LangGraph Workflow"]
+        Planner[Planner node]:::core
+        Researcher[Researcher nodes]:::core
+        Writer[Writer node]:::core
+    end
+
+    subgraph Evidence["Evidence Retrieval"]
+        Search[SearXNG search client]:::core
+        SearXNG[(SearXNG optional)]:::external
+        Reranker[FlashRank reranker]:::core
+        FlashRank[(FlashRank optional)]:::external
+        SearchWarnings[search and rerank warnings]:::metadata
+    end
+
+    subgraph Synthesis["Report Synthesis"]
+        Gemini{{Gemini API optional}}:::external
+        Report[ResearchReport with warnings]:::review
+        Metadata[Task and report metadata]:::metadata
+    end
+
+    Question --> Planner --> Researcher
+    Researcher --> Search
+    Search <-->|web results| SearXNG
+    Search -. service unavailable .-> SearchWarnings
+    Search --> Reranker
+    Reranker <-->|semantic ranking| FlashRank
+    Reranker -. keyword fallback .-> SearchWarnings
+    Reranker --> Researcher --> Writer
+    Writer <-->|optional summary| Gemini
+    Writer -. degraded LLM path .-> Metadata
+    SearchWarnings --> Metadata --> Report
+    Writer --> Report --> Reader
 ```
 
 ## Main Components
