@@ -2,10 +2,60 @@
 
 A small portfolio project that experiments with LangGraph-based research workflows, SearXNG search, FlashRank reranking, and Gemini-generated summaries. It is useful for local demos and code review, but external service failures can degrade output quality and should be treated as visible warnings rather than successful research.
 
-## Portfolio Review
+## Portfolio Showcase
 
-- [Architecture](docs/ARCHITECTURE.md) - component boundaries, data flow, external dependencies, and degraded-mode behavior.
-- [Demo Guide](docs/DEMO.md) - safe local walkthrough commands and recruiter-facing talking points.
+![Hierarchical Research Team CLI showcase](docs/assets/showcase.png)
+
+- **Architecture deep dive:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- **Demo guide:** [`docs/DEMO.md`](docs/DEMO.md)
+- **Reviewer focus:** LangGraph workflow orchestration, SearXNG search, FlashRank reranking, Gemini summaries, and warning propagation.
+
+## Architecture Overview
+
+```mermaid
+flowchart TB
+    classDef input fill:#ecfeff,stroke:#0891b2,stroke-width:2px,color:#164e63
+    classDef core fill:#eef2ff,stroke:#4f46e5,stroke-width:2px,color:#312e81
+    classDef external fill:#fff7ed,stroke:#ea580c,stroke-width:2px,color:#7c2d12
+    classDef metadata fill:#f0fdf4,stroke:#16a34a,stroke-width:2px,color:#14532d
+    classDef review fill:#fef2f2,stroke:#dc2626,stroke-width:2px,color:#7f1d1d
+
+    Question[/Research question/]:::input
+    Reader[/Human source review/]:::review
+
+    subgraph Workflow["LangGraph Workflow"]
+        Planner[Planner node]:::core
+        Researcher[Researcher nodes]:::core
+        Writer[Writer node]:::core
+    end
+
+    subgraph Evidence["Evidence Retrieval"]
+        Search[SearXNG search client]:::core
+        SearXNG[(SearXNG optional)]:::external
+        Reranker[FlashRank reranker]:::core
+        FlashRank[(FlashRank optional)]:::external
+        SearchWarnings[search and rerank warnings]:::metadata
+    end
+
+    subgraph Synthesis["Report Synthesis"]
+        Gemini{{Gemini API optional}}:::external
+        Report[ResearchReport with warnings]:::review
+        Metadata[Task and report metadata]:::metadata
+    end
+
+    Question --> Planner --> Researcher
+    Researcher --> Search
+    Search <-->|web results| SearXNG
+    Search -. service unavailable .-> SearchWarnings
+    Search --> Reranker
+    Reranker <-->|semantic ranking| FlashRank
+    Reranker -. keyword fallback .-> SearchWarnings
+    Reranker --> Researcher --> Writer
+    Writer <-->|optional summary| Gemini
+    Writer -. degraded LLM path .-> Metadata
+    SearchWarnings --> Metadata --> Report
+    Writer --> Report --> Reader
+```
 
 ## What Works Today
 
@@ -29,31 +79,6 @@ A small portfolio project that experiments with LangGraph-based research workflo
 - **Structured Output**: Generates report-shaped output with source metadata
 - **Async Support**: Uses async/await around the graph and search client
 - **Observable**: Phoenix tracing integration for monitoring agent behavior
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        Supervisor                            │
-│  - Creates research plan                                     │
-│  - Routes tasks to specialized agents                        │
-│  - Monitors progress and decides completion                  │
-└─────────────────┬───────────────────────┬───────────────────┘
-                  │                       │
-                  ▼                       ▼
-    ┌─────────────────────┐   ┌─────────────────────┐
-    │     Researcher      │   │       Writer        │
-    │  - Executes search  │   │  - Synthesizes      │
-    │  - Reranks results  │   │    findings         │
-    │  - Extracts facts   │   │  - Generates report │
-    └─────────────────────┘   └─────────────────────┘
-              │
-              ▼
-    ┌─────────────────────┐
-    │  SearXNG + FlashRank │
-    │  (Search & Rerank)   │
-    └─────────────────────┘
-```
 
 ## Quick Start
 
